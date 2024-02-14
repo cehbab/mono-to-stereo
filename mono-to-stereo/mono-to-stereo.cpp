@@ -119,18 +119,23 @@ HRESULT LoopbackCapture(
         return E_UNEXPECTED;
     }
 
+    bool hasFloats = false;
     if (pwfx->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
         auto pwfxExtensible = reinterpret_cast<PWAVEFORMATEXTENSIBLE>(pwfx);
-        if (!IsEqualGUID(KSDATAFORMAT_SUBTYPE_PCM, pwfxExtensible->SubFormat) && !IsEqualGUID(KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, pwfxExtensible->SubFormat)) {
+        hasFloats = (IsEqualGUID(KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, pwfxExtensible->SubFormat) != 0);
+        if (!hasFloats && !IsEqualGUID(KSDATAFORMAT_SUBTYPE_PCM, pwfxExtensible->SubFormat)) {
             OLECHAR subFormatGUID[39];
             StringFromGUID2(pwfxExtensible->SubFormat, subFormatGUID, _countof(subFormatGUID));
             ERR(L"extensible input format not PCM, got %s", subFormatGUID);
             return E_UNEXPECTED;
         }
     }
-    else if (pwfx->wFormatTag != WAVE_FORMAT_PCM && pwfx->wFormatTag != WAVE_FORMAT_IEEE_FLOAT) {
-        ERR(L"input format not PCM, got %d", pwfx->wFormatTag);
-        return E_UNEXPECTED;
+    else {
+        hasFloats = (pwfx->wFormatTag == WAVE_FORMAT_IEEE_FLOAT);
+        if (!hasFloats && pwfx->wFormatTag != WAVE_FORMAT_PCM) {
+            ERR(L"input format not PCM, got %d", pwfx->wFormatTag);
+            return E_UNEXPECTED;
+        }
     }
 
     pwfx->nBlockAlign = pwfx->nChannels * pwfx->wBitsPerSample / 8;
@@ -256,10 +261,10 @@ HRESULT LoopbackCapture(
         return hr;
     }
 
-    if (pwfx->nSamplesPerSec != pwfxOut->nSamplesPerSec) {
-        ERR(L"cannot convert between sample rates");
-        return E_UNEXPECTED;
-    }
+    //if (pwfx->nSamplesPerSec != pwfxOut->nSamplesPerSec) {
+    //    ERR(L"cannot convert between sample rates");
+    //    return E_UNEXPECTED;
+    //}
 
     hr = pAudioOutClient->Initialize(
         AUDCLNT_SHAREMODE_SHARED, 0,
@@ -327,6 +332,29 @@ HRESULT LoopbackCapture(
     UINT nBytes = pwfx->wBitsPerSample / 8;
     std::vector<BYTE> tmpSample(nBytes);
 
+    BYTE* pConverted = NULL;
+    SRC_STATE* converter = NULL;
+    SRC_DATA srcData = { NULL, NULL, 0, 0, 0, 0, 0, 0.0 };
+
+    if (pwfx->nSamplesPerSec != pwfxOut->nSamplesPerSec) {
+        int error;
+        converter = src_new(SRC_SINC_FASTEST, pwfx->nChannels, &error);
+        if (error) {
+            ERR(L"libsamplerate error: %S", src_strerror(error));
+            return E_UNEXPECTED;
+        }
+
+        double srcRatio = (double)pwfxOut->nSamplesPerSec / pwfx->nSamplesPerSec;
+        int numSamples = clientBufferFrameCount * pwfx->nChannels;
+        int numOutSamples = (int)(numSamples * srcRatio);
+
+        srcData.data_in = new float[numSamples];
+        srcData.data_out = new float[numOutSamples];
+        srcData.src_ratio = srcRatio;
+
+        pConverted = new BYTE[numOutSamples * nBytes];
+    }
+
     while (!bDone) {
         dwWaitResult = WaitForMultipleObjects(
             ARRAYSIZE(waitArray), waitArray,
@@ -341,7 +369,9 @@ HRESULT LoopbackCapture(
 
         if (WAIT_OBJECT_0 + 1 != dwWaitResult) {
             ERR(L"Unexpected WaitForMultipleObjects return value %u after %u frames", dwWaitResult, *pnFrames);
-            return E_UNEXPECTED;
+            hr = E_UNEXPECTED;
+            bDone = true;
+            break;
         }
 
         for (;;) {
@@ -355,7 +385,8 @@ HRESULT LoopbackCapture(
             hr = pAudioCaptureClient->GetNextPacketSize(&nNextPacketSize);
             if (FAILED(hr)) {
                 ERR(L"IAudioCaptureClient::GetNextPacketSize failed after %u frames: hr = 0x%08x", *pnFrames, hr);
-                return hr;
+                bDone = true;
+                break;
             }
 
             if (nNextPacketSize == 0) {
@@ -365,14 +396,17 @@ HRESULT LoopbackCapture(
             hr = pAudioCaptureClient->GetBuffer(&pData, &nNumFramesToRead, &dwFlags, NULL, NULL);
             if (FAILED(hr)) {
                 ERR(L"IAudioCaptureClient::GetBuffer failed after %u frames: hr = 0x%08x", *pnFrames, hr);
-                return hr;
+                bDone = true;
+                break;
             }
 
             if (nNextPacketSize != nNumFramesToRead) {
                 ERR(L"GetNextPacketSize and GetBuffer values don't match (%u and %u) after %u frames", nNextPacketSize, nNumFramesToRead, *pnFrames);
                 // release capture buffer before exiting
                 pAudioCaptureClient->ReleaseBuffer(nNumFramesToRead);
-                return E_UNEXPECTED;
+                hr = E_UNEXPECTED;
+                bDone = true;
+                break;
             }
 
             if (AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY == dwFlags) {
@@ -384,7 +418,9 @@ HRESULT LoopbackCapture(
                 LOG(L"IAudioCaptureClient::GetBuffer set flags to 0x%08x after %u frames", dwFlags, *pnFrames);
                 // release capture buffer before exiting
                 pAudioCaptureClient->ReleaseBuffer(nNumFramesToRead);
-                return E_UNEXPECTED;
+                hr = E_UNEXPECTED;
+                bDone = true;
+                break;
             }
 
             if (nNumFramesToRead % 2 != 0) {
@@ -414,6 +450,23 @@ HRESULT LoopbackCapture(
             // this is halved because nNumFramesToRead came from a mono source
             UINT32 nNumFramesToWrite = (bForceMonoToStereo ? nNumFramesToRead / 2 : nNumFramesToRead);
 
+            if (converter) {
+                int numSamples = nNumFramesToWrite * pwfx->nChannels;
+                src_int_to_float_array((int*)pData, (float*)srcData.data_in, numSamples);
+
+                int numOutSamples = (int)(numSamples * srcData.src_ratio);
+
+                srcData.input_frames = numSamples;
+                srcData.output_frames = numOutSamples;
+
+                src_process(converter, &srcData);
+
+                src_float_to_int_array(srcData.data_out, (int*)pConverted, numOutSamples);
+
+                pData = pConverted;
+                nNumFramesToWrite = numOutSamples / pwfx->nChannels;
+            }
+
             for (;;) {
                 hr = pRenderClient->GetBuffer(nNumFramesToWrite, &pOutData);
                 if (hr == AUDCLNT_E_BUFFER_TOO_LARGE) {
@@ -425,8 +478,12 @@ HRESULT LoopbackCapture(
                     ERR(L"IAudioCaptureClient::GetBuffer failed (output) after %u frames: hr = 0x%08x", *pnFrames, hr);
                     // release capture buffer before exiting
                     pAudioCaptureClient->ReleaseBuffer(nNumFramesToRead);
-                    return hr;
+                    bDone = true;
                 }
+                break;
+            }
+
+            if (bDone) {
                 break;
             }
 
@@ -444,18 +501,27 @@ HRESULT LoopbackCapture(
                 ERR(L"IAudioCaptureClient::ReleaseBuffer failed (output) after %u frames: hr = 0x%08x", *pnFrames, hr);
                 // release capture buffer before exiting
                 pAudioCaptureClient->ReleaseBuffer(nNumFramesToRead);
-                return hr;
+                bDone = true;
+                break;
             }
 
             hr = pAudioCaptureClient->ReleaseBuffer(nNumFramesToRead);
             if (FAILED(hr)) {
                 ERR(L"IAudioCaptureClient::ReleaseBuffer failed after %u frames: hr = 0x%08x", *pnFrames, hr);
-                return hr;
+                bDone = true;
+                break;
             }
-
             *pnFrames += nNumFramesToRead;
         }
     } // capture loop
+
+    if (converter) {
+        delete srcData.data_in;
+        delete srcData.data_out;
+        delete pConverted;
+
+        src_delete(converter);
+    }
 
     return hr;
 }
@@ -483,81 +549,80 @@ void sndcpy(void *dst, WAVEFORMATEX* pwfxOut, const void *src, WAVEFORMATEX* pwf
 
     // does not support converting between sample different sample rates, would require some form of interpolation??
 
-    if (nNumFrames == 0 || pwfx->nSamplesPerSec != pwfxOut->nSamplesPerSec) {
+    if (nNumFrames == 0) {// || pwfx->nSamplesPerSec != pwfxOut->nSamplesPerSec) {
         // do nothing
         return;
     }
-    else if (pwfx->nChannels == pwfxOut->nChannels && pwfx->wBitsPerSample == pwfxOut->wBitsPerSample) {
+    else if (pwfx->nChannels == pwfxOut->nChannels && pwfx->wBitsPerSample == pwfxOut->wBitsPerSample && pwfx->nSamplesPerSec == pwfxOut->nSamplesPerSec) {
         // same format, raw copy
         memcpy(dst, src, nNumFrames * pwfx->nBlockAlign);
         return;
     }
-    else {
-        BYTE *in = (BYTE *)src;
-        BYTE *out = (BYTE *)dst;
 
-        UINT nBytes = pwfx->wBitsPerSample / 8;
-        UINT nOutBytes = pwfxOut->wBitsPerSample / 8;
+    BYTE *in = (BYTE *)src;
+    BYTE *out = (BYTE *)dst;
 
-        std::vector<BYTE> channel(nOutBytes);
+    UINT nBytes = pwfx->wBitsPerSample / 8;
+    UINT nOutBytes = pwfxOut->wBitsPerSample / 8;
 
-        BYTE *pOutData, *pData;
-        UINT nFrameOffset = 0;
-        while (nFrameOffset < nNumFrames) {
-            pData = &in[nFrameOffset * pwfx->nBlockAlign];
-            pOutData = &out[nFrameOffset * pwfxOut->nBlockAlign];
+    std::vector<BYTE> channel(nOutBytes);
 
-            // copy in L to out L always
-            valcpy(pOutData, nOutBytes, pData, nBytes);
+    BYTE *pOutData, *pData;
+    UINT nFrameOffset = 0;
+    while (nFrameOffset < nNumFrames) {
+        pData = &in[nFrameOffset * pwfx->nBlockAlign];
+        pOutData = &out[nFrameOffset * pwfxOut->nBlockAlign];
 
-            if (pwfxOut->nChannels == 1) { // mono
-                // do nothing
-            }
-            if (pwfxOut->nChannels >= 2) { // stereo
-                if (pwfx->nChannels >= 2) {
-                    // copy in R to out R
-                    valcpy(pOutData + nOutBytes, nOutBytes, pData + nBytes, nBytes);
-                }
-                else if(bDuplicateChannels) {
-                    // copy out L to out R
-                    memcpy(pOutData + nOutBytes, pOutData, nOutBytes);
-                }
-            }
-            if (pwfxOut->nChannels >= 4) { // quad
-                if (pwfx->nChannels >= 4) {
-                    // copy in LR to out LR
-                    valcpy(pOutData + (nOutBytes * 2), nOutBytes, pData + (nBytes * 2), nBytes);
-                    // copy in RR to out RR
-                    valcpy(pOutData + (nOutBytes * 3), nOutBytes, pData + (nBytes * 3), nBytes);
-                }
-                else if (bDuplicateChannels) {
-                    // copy out L and R to out RL and RR
-                    memcpy(pOutData + (nOutBytes * 2), pOutData, nOutBytes * 2);
-                }
-            }
-            if (pwfxOut->nChannels >= 6) { // 5.1
-                if (pwfx->nChannels >= 6) {
-                    // copy in C to out C
-                    valcpy(pOutData + (nOutBytes * 4), nOutBytes, pData + (nBytes * 4), nBytes);
-                    // copy in SW to out SW
-                    valcpy(pOutData + (nOutBytes * 5), nOutBytes, pData + (nBytes * 5), nBytes);
-                }
-            }
-            if (pwfxOut->nChannels >= 8) { // 7.1
-                if (pwfx->nChannels >= 8) {
-                    // copy in ML to out ML
-                    valcpy(pOutData + (nOutBytes * 6), nOutBytes, pData + (nBytes * 6), nBytes);
-                    // copy in MR to out MR
-                    valcpy(pOutData + (nOutBytes * 7), nOutBytes, pData + (nBytes * 7), nBytes);
-                }
-                else if (bDuplicateChannels) {
-                    // copy out L and R to out RL and RR
-                    // NOTE: copy from front speakers, not rear speakers
-                    memcpy(pOutData + (nOutBytes * 2), pOutData, nOutBytes * 2);
-                }
-            }
+        // copy in L to out L always
+        valcpy(pOutData, nOutBytes, pData, nBytes);
 
-            nFrameOffset++;
+        if (pwfxOut->nChannels == 1) { // mono
+            // do nothing
         }
+        if (pwfxOut->nChannels >= 2) { // stereo
+            if (pwfx->nChannels >= 2) {
+                // copy in R to out R
+                valcpy(pOutData + nOutBytes, nOutBytes, pData + nBytes, nBytes);
+            }
+            else if(bDuplicateChannels) {
+                // copy out L to out R
+                memcpy(pOutData + nOutBytes, pOutData, nOutBytes);
+            }
+        }
+        if (pwfxOut->nChannels >= 4) { // quad
+            if (pwfx->nChannels >= 4) {
+                // copy in LR to out LR
+                valcpy(pOutData + (nOutBytes * 2), nOutBytes, pData + (nBytes * 2), nBytes);
+                // copy in RR to out RR
+                valcpy(pOutData + (nOutBytes * 3), nOutBytes, pData + (nBytes * 3), nBytes);
+            }
+            else if (bDuplicateChannels) {
+                // copy out L and R to out RL and RR
+                memcpy(pOutData + (nOutBytes * 2), pOutData, nOutBytes * 2);
+            }
+        }
+        if (pwfxOut->nChannels >= 6) { // 5.1
+            if (pwfx->nChannels >= 6) {
+                // copy in C to out C
+                valcpy(pOutData + (nOutBytes * 4), nOutBytes, pData + (nBytes * 4), nBytes);
+                // copy in SW to out SW
+                valcpy(pOutData + (nOutBytes * 5), nOutBytes, pData + (nBytes * 5), nBytes);
+            }
+        }
+        if (pwfxOut->nChannels >= 8) { // 7.1
+            if (pwfx->nChannels >= 8) {
+                // copy in ML to out ML
+                valcpy(pOutData + (nOutBytes * 6), nOutBytes, pData + (nBytes * 6), nBytes);
+                // copy in MR to out MR
+                valcpy(pOutData + (nOutBytes * 7), nOutBytes, pData + (nBytes * 7), nBytes);
+            }
+            else if (bDuplicateChannels) {
+                // copy out L and R to out RL and RR
+                // NOTE: copy from front speakers, not rear speakers
+                memcpy(pOutData + (nOutBytes * 2), pOutData, nOutBytes * 2);
+            }
+        }
+
+        nFrameOffset++;
     }
 }

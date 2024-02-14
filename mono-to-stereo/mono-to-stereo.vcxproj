@@ -83,8 +83,12 @@
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Console</SubSystem>
-      <AdditionalDependencies>avrt.lib;ole32.lib;winmm.lib</AdditionalDependencies>
+      <AdditionalDependencies>avrt.lib;ole32.lib;winmm.lib;samplerate.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>libsamplerate\x86</AdditionalLibraryDirectories>
     </Link>
+    <PostBuildEvent>
+      <Command>copy $(ProjectDir)libsamplerate\x86\samplerate.dll $(OutDir)</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
@@ -97,8 +101,12 @@
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Console</SubSystem>
-      <AdditionalDependencies>avrt.lib;ole32.lib;winmm.lib</AdditionalDependencies>
+      <AdditionalDependencies>avrt.lib;ole32.lib;winmm.lib;samplerate.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>libsamplerate\x64</AdditionalLibraryDirectories>
     </Link>
+    <PostBuildEvent>
+      <Command>copy $(ProjectDir)libsamplerate\x64\samplerate.dll $(OutDir)</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
@@ -116,8 +124,12 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <SubSystem>Console</SubSystem>
-      <AdditionalDependencies>avrt.lib;ole32.lib;winmm.lib</AdditionalDependencies>
+      <AdditionalDependencies>avrt.lib;ole32.lib;winmm.lib;samplerate.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>libsamplerate\x86</AdditionalLibraryDirectories>
     </Link>
+    <PostBuildEvent>
+      <Command>copy $(ProjectDir)libsamplerate\x86\samplerate.dll $(OutDir)</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -135,8 +147,12 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <SubSystem>Console</SubSystem>
-      <AdditionalDependencies>avrt.lib;ole32.lib;winmm.lib</AdditionalDependencies>
+      <AdditionalDependencies>avrt.lib;ole32.lib;winmm.lib;samplerate.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>libsamplerate\x64</AdditionalLibraryDirectories>
     </Link>
+    <PostBuildEvent>
+      <Command>copy $(ProjectDir)libsamplerate\x64\samplerate.dll $(OutDir)</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="guid.cpp" />
@@ -147,6 +163,7 @@
   <ItemGroup>
     <ClInclude Include="cleanup.h" />
     <ClInclude Include="common.h" />
+    <ClInclude Include="libsamplerate\samplerate.h" />
     <ClInclude Include="log.h" />
     <ClInclude Include="mono-to-stereo.h" />
     <ClInclude Include="prefs.h" />

@@ -12,3 +12,4 @@
 #include "cleanup.h"
 #include "prefs.h"
 #include "mono-to-stereo.h"
+#include "libsamplerate\samplerate.h"

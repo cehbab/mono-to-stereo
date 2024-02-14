@@ -1,0 +1,2 @@
+This package came from https://github.com/libsndfile/libsamplerate/releases
+v0.22 x86 and x64
