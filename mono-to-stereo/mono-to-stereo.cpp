@@ -331,10 +331,13 @@ HRESULT LoopbackCapture(
 
     UINT nBytes = pwfx->wBitsPerSample / 8;
     std::vector<BYTE> tmpSample(nBytes);
+    BYTE* swapBuffer = tmpSample.data();
 
     BYTE* pConverted = NULL;
     SRC_STATE* converter = NULL;
     SRC_DATA srcData = { NULL, NULL, 0, 0, 0, 0, 0, 0.0 };
+    int *iBuf = NULL;
+    int *iOutBuf = NULL;
 
     if (pwfx->nSamplesPerSec != pwfxOut->nSamplesPerSec) {
         int error;
@@ -348,11 +351,15 @@ HRESULT LoopbackCapture(
         int numSamples = clientBufferFrameCount * pwfx->nChannels;
         int numOutSamples = (int)(numSamples * srcRatio);
 
-        srcData.data_in = new float[numSamples];
+        srcData.data_in = (hasFloats ? NULL : new float[numSamples]);
         srcData.data_out = new float[numOutSamples];
         srcData.src_ratio = srcRatio;
 
-        pConverted = new BYTE[numOutSamples * nBytes];
+        if (!hasFloats) {
+            iBuf = new int[numSamples];
+            iOutBuf = new int[numOutSamples];
+            pConverted = new BYTE[numOutSamples * nBytes];
+        }
     }
 
     while (!bDone) {
@@ -434,14 +441,14 @@ HRESULT LoopbackCapture(
                     switch (pwfx->nChannels) {
                     case 8:
                         // ML and MR
-                        ProcessSample(pOffset + (nBytes * 6), tmpSample.data(), nBytes, preProcess);
+                        ProcessSample(pOffset + (nBytes * 6), swapBuffer, nBytes, preProcess);
                     case 6:
                     case 4:
                         // RL and RR
-                        ProcessSample(pOffset + (nBytes * 2), tmpSample.data(), nBytes, preProcess);
+                        ProcessSample(pOffset + (nBytes * 2), swapBuffer, nBytes, preProcess);
                     case 2:
                         // L and R
-                        ProcessSample(pOffset, tmpSample.data(), nBytes, preProcess);
+                        ProcessSample(pOffset, swapBuffer, nBytes, preProcess);
                         break;
                     }
                 }
@@ -452,19 +459,47 @@ HRESULT LoopbackCapture(
 
             if (converter) {
                 int numSamples = nNumFramesToWrite * pwfx->nChannels;
-                src_int_to_float_array((int*)pData, (float*)srcData.data_in, numSamples);
+                if (!hasFloats) {
+                    // convert incoming
+                    for (int i = 0; i < numSamples; i++) {
+                        BYTE* bOffset = pData + (i * nBytes);
+                        // endian switching
+                        iBuf[i] = (int)bOffset[0] & (int)bOffset[1] << 8 & (int)bOffset[2] << 16 & (int)bOffset[3] << 24;
+                    }
+                    src_int_to_float_array(iBuf, (float*)srcData.data_in, numSamples);
+                }
+                else {
+                    srcData.data_in = (float*)pData;
+                }
 
-                int numOutSamples = (int)(numSamples * srcData.src_ratio);
+                srcData.input_frames = nNumFramesToWrite;
+                srcData.output_frames = (int)(nNumFramesToWrite * srcData.src_ratio);
 
-                srcData.input_frames = numSamples;
-                srcData.output_frames = numOutSamples;
+                int error = src_process(converter, &srcData);
+                if (error) {
+                    ERR(L"libsamplerate error: %S", src_strerror(error));
+                }
 
-                src_process(converter, &srcData);
+                if (!hasFloats) {
+                    int numOutSamples = (int)(numSamples * srcData.src_ratio);
+                    src_float_to_int_array(srcData.data_out, iOutBuf, numOutSamples);
+                    // convert incoming
+                    for (int i = 0; i < numOutSamples; i++) {
+                        BYTE* bOffset = pConverted + (i * nBytes);
+                        // endian switching
+                        int sample = iOutBuf[i];
+                        bOffset[0] = (sample & 0xFF);
+                        bOffset[1] = (sample >> 8) & 0xFF;
+                        bOffset[2] = (sample >> 16) & 0xFF;
+                        bOffset[3] = (sample >> 24) & 0xFF;
+                    }
+                    pData = pConverted;
+                }
+                else {
+                    pData = (BYTE*)srcData.data_out;
+                }
 
-                src_float_to_int_array(srcData.data_out, (int*)pConverted, numOutSamples);
-
-                pData = pConverted;
-                nNumFramesToWrite = numOutSamples / pwfx->nChannels;
+                nNumFramesToWrite = srcData.output_frames;
             }
 
             for (;;) {
@@ -516,9 +551,15 @@ HRESULT LoopbackCapture(
     } // capture loop
 
     if (converter) {
-        delete srcData.data_in;
         delete srcData.data_out;
-        delete pConverted;
+        if (!hasFloats) {
+            delete srcData.data_in;
+
+            delete iBuf;
+            delete iOutBuf;
+
+            delete pConverted;
+        }
 
         src_delete(converter);
     }
