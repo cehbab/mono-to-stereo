@@ -1,6 +1,9 @@
 This package came from https://github.com/libsndfile/libsamplerate/releases
 v0.22 x86 and x64
 
+
+libsamplerate will only build on vs2019 and later, I assume.
+
 Open a VS2019 development command prompt
 cd libsamplerate-master
 cmake -A Win32 -B ..\libsamplerate-2019-build32
