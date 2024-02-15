@@ -1,2 +1,15 @@
 This package came from https://github.com/libsndfile/libsamplerate/releases
 v0.22 x86 and x64
+
+Open a VS2019 development command prompt
+cd libsamplerate-master
+cmake -A Win32 -B ..\libsamplerate-2019-build32
+cmake -A x64 -B ..\libsamplerate-2019-build64
+
+change Runtime Library for project "samplerate" for all versions to Multi-threaded (/MT) for Release or /MTd if Debug
+
+build project "samplerate" for Win32 for both debug and release
+build project "samplerate" for x64 for both debug and release
+
+static libs end up in libsamplerate-2019-buildXX\src\Release|Debug
+

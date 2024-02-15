@@ -66,7 +66,11 @@ CPrefs::CPrefs(int argc, LPCWSTR argv[], HRESULT &hr)
 {
     switch (argc) {
     case 2:
-        if (0 == _wcsicmp(argv[1], L"-?") || 0 == _wcsicmp(argv[1], L"/?")) {
+        if (0 == _wcsicmp(argv[1], L"-?") ||
+            0 == _wcsicmp(argv[1], L"--?") ||
+            0 == _wcsicmp(argv[1], L"/?") ||
+            0 == _wcsicmp(argv[1], L"--help")
+        ) {
             // print usage but don't actually capture
             hr = S_FALSE;
             usage(argv[0]);
