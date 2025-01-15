@@ -9,5 +9,6 @@ Original code based off of [Matthew van Eerde's loopback-capture](https://github
 project.
 
 Includes fixes for sample size changes, Quad channel, 5.1 and 7.1 sound card setups and some simple pre-processing.
+Also includes sample rate conversion between audio devices.
 
 Run `mono-to-stereo.exe -?` for usage instructions.
