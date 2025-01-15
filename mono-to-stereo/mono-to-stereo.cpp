@@ -252,6 +252,8 @@ HRESULT LoopbackCapture(
     if (hr == S_OK) {
         pwfxOut = pwfx;
     }
+    LOG(L" ForceMonoToStereo %S", bForceMonoToStereo ? "yes" : "no");
+    LOG(L" FrameSize %ld -> %ld", pwfx->nBlockAlign, pwfxOut->nBlockAlign);
     LOG(L" Channels %ld -> %ld", pwfx->nChannels, pwfxOut->nChannels);
     LOG(L" BitsPerSample %ld -> %ld", pwfx->wBitsPerSample, pwfxOut->wBitsPerSample);
     LOG(L" SamplesPerSec %ld -> %ld", pwfx->nSamplesPerSec, pwfxOut->nSamplesPerSec);
@@ -420,6 +422,8 @@ HRESULT LoopbackCapture(
                 if (*pnFrames != 0) {
                     LOG(L"Probably spurious glitch reported after %u frames", *pnFrames);
                 }
+                pAudioCaptureClient->ReleaseBuffer(nNumFramesToRead);
+                continue;
             }
             else if (0 != dwFlags) {
                 LOG(L"IAudioCaptureClient::GetBuffer set flags to 0x%08x after %u frames", dwFlags, *pnFrames);
@@ -434,9 +438,12 @@ HRESULT LoopbackCapture(
                 ERR(L"frames to output is odd (%u), will miss the last sample after %u frames", nNumFramesToRead, *pnFrames);
             }
 
+            // this is halved because nNumFramesToRead came from a mono source
+            UINT32 nNumFramesToWrite = (bForceMonoToStereo ? nNumFramesToRead / 2 : nNumFramesToRead);
+
             // pre-process audio data
             if (pwfx->nChannels >= 2 && preProcess.IsRequired()) {
-                for (UINT i = 0; i < nNumFramesToRead; i++) {
+                for (UINT i = 0; i < nNumFramesToWrite; i++) {
                     BYTE* pOffset = pData + (i * pwfx->nBlockAlign);
                     switch (pwfx->nChannels) {
                     case 8:
@@ -453,9 +460,6 @@ HRESULT LoopbackCapture(
                     }
                 }
             }
-
-            // this is halved because nNumFramesToRead came from a mono source
-            UINT32 nNumFramesToWrite = (bForceMonoToStereo ? nNumFramesToRead / 2 : nNumFramesToRead);
 
             if (converter) {
                 int numSamples = nNumFramesToWrite * pwfx->nChannels;
